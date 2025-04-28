@@ -2,3 +2,9 @@ numpy
 scipy
 matplotlib
 pygame
+tensorflow
+tensorflow_datasets
+optax
+
+jax
+tqdm

@@ -1,8 +1,6 @@
 import numpy as np
+from consts import W, H, SIGMA, EPSILON
 
-W, H = 800, 800
-SIGMA = 1
-EPSILON = 10
 
 def compute_total_energy(particles):
     kinetic = sum(0.5 * np.dot(p.vel, p.vel) for p in particles)
