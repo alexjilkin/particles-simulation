@@ -1,0 +1,3 @@
+W, H = 800, 800
+SIGMA = 1
+EPSILON = 3
