@@ -35,7 +35,6 @@ def lennard_jones_force(p1, p2, max_force=50):
         return np.zeros(2)
 
     factor = 24 * EPSILON * (2 * (SIGMA / r)**12 - (SIGMA / r)**6) / r**2
-    print(f"Expected force magnitude at r=2: {factor:.3f}")
     force = factor * r_vec
 
     mag = np.linalg.norm(force)
