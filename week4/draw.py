@@ -9,7 +9,8 @@ class Drawable:
 
     def world_to_screen(self, zoom):
         center = np.array([W // 2, H // 2])
-        return (self.pos - center) * zoom + center
+        flipped_pos = np.array([self.pos[0], H - self.pos[1]]) 
+        return (flipped_pos - center) * zoom + center
 
     def draw(self, surf, zoom):
         raise NotImplementedError("Subclasses must implement draw()")

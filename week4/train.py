@@ -1,91 +1,124 @@
-# Existing imports & setup omitted here
 import os
-from typing import Callable
-
-import numpy as np
-from tqdm import tqdm
-
-from consts import W, H, SIGMA, EPSILON
-from particles import Particle, create_lattice, lennard_jones_force, random_particles
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-
+from particles import Particle, lennard_jones_force, random_particles, create_lattice
 from network import LJNet
-from utils import is_far_enough
+from tqdm import tqdm
+from consts import W, H, SIGMA
+
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
+
+from graph_network import LJGnn
+
+def particles_to_graph(positions, forces, cutoff=5.0):
+    num_particles = len(positions)
+    edge_index = []
+    edge_attr = []
+    for i in range(num_particles):
+        for j in range(num_particles):
+            if i != j:
+                rel_vector = positions[i] - positions[j]
+                dist = np.linalg.norm(rel_vector)
+                if dist < cutoff:  
+                    edge_index.append([i, j])
+                    edge_index.append([j, i])
+                    edge_attr.append([rel_vector[0], rel_vector[1], dist])
+                    edge_attr.append([-rel_vector[0], -rel_vector[1], dist])
+
+    edge_index = torch.tensor(edge_index).t().contiguous()
+    edge_attr = torch.tensor(edge_attr, dtype=torch.float32)
+
+    x = torch.zeros((num_particles, 1))
+    y = torch.tensor(forces, dtype=torch.float32)
+
+    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
 
 
-def train(force_func: Callable[[np.ndarray, np.ndarray], float], dt = 0.01, N=200):
-    data_X = []
-    data_Y = []
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    for sim_step in tqdm(range(N), desc="Collecting samples"):
-        particles = random_particles(np.random.randint(10, 100))
-        N = len(particles)
-
-        for i, pi in enumerate(particles):
-            for j in range(i + 1, N):
-                pj = particles[j]
-                r_vec = pi.pos - pj.pos
-                r_vec -= np.round(r_vec / np.array([W, H])) * np.array([W, H])
-
-                r = np.linalg.norm(r_vec)
-                if 1e-5 < r <= 2 * SIGMA:
-                    force = force_func(pi, pj)
-                    data_X.append(r_vec)
-                    data_Y.append(force)
-
-    particles = create_lattice(rows=5, cols=10)
-
-    dist = Particle()
-    dist.pos = np.array([W//2 + 3.0, H // 2 - 3])
-    dist.vel = np.array([0.0, 0.5])
-
-    particles.append(dist)
+def compute_forces(particles):
     N = len(particles)
-
-    for i, pi in enumerate(particles):
-            for j in range(i + 1, N):
-                pj = particles[j]
-                r_vec = pi.pos - pj.pos
+    forces = np.zeros((N, 2))
+    for i in range(N):
+        for j in range(N):
+            if i != j:
+                r_vec = particles[i].pos - particles[j].pos
                 r_vec -= np.round(r_vec / np.array([W, H])) * np.array([W, H])
-
                 r = np.linalg.norm(r_vec)
-                if 1e-5 < r <= 2 * SIGMA:
-                    force = force_func(pi, pj)
-                    data_X.append(r_vec)
-                    data_Y.append(force)
+                if 1 * SIGMA < r <= 5 * SIGMA:
+                    forces[i] += lennard_jones_force(particles[i], particles[j])
+    return forces
 
-    data_X = np.array(data_X)
-    data_Y = np.array(data_Y)
+from torch_geometric.data import Data
 
+base_dir = os.path.dirname(__file__)  # folder of current script
 
-    X = torch.tensor(data_X, dtype=torch.float32)
-    Y = torch.tensor(data_Y, dtype=torch.float32)
+def generate_data(N_samples, num_particles, cutoff=3.0, dt=0.01):
+    filename = os.path.join(base_dir, "data", f"data_{N_samples}.npz")
 
-    dataset = torch.utils.data.TensorDataset(X, Y)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=128, shuffle=True)
+    if os.path.exists(filename):
+        print(f"Loading data from {filename}")
+        data = np.load(filename)
+        X, Y = data['X'], data['Y']
+    else:
+        print(f"Generating {N_samples} samples and saving to {filename}")
+        data_X, data_Y = [], []
+        for _ in tqdm(range(N_samples), desc="Generating data"):
+            particles = random_particles(num_particles, 1.15 * SIGMA, 6 * SIGMA)
 
+            for p in particles:
+                p.vel = np.random.randn(2) * 0.2
+                p.acc = np.zeros(2)
 
-    model = LJNet()
+            # Verlet-style position update
+            for p in particles:
+                p.pos += p.vel * dt + 0.5 * p.acc * dt**2
+                p.pos %= [W, H] 
+
+            forces = compute_forces(particles)
+            positions = np.array([p.pos for p in particles])
+
+            if np.any(np.abs(forces) > 30):
+                continue
+            if np.any(forces != 0):
+                data_X.append(positions)
+                data_Y.append(forces)
+
+        X = np.array(data_X)
+        Y = np.array(data_Y)
+
+        np.savez_compressed(filename, X=X, Y=Y)
+
+    graph_dataset = []
+    for i in range(len(X)):
+        pos = X[i]
+        frc = Y[i]
+
+        graph = particles_to_graph(pos, frc, cutoff=cutoff)
+        graph_dataset.append(graph)
+
+    return X, Y, graph_dataset
+def train_gnn(N, epochs, lr=0.001):
+    _, _, dataset = generate_data(N, 30)
+    loader = DataLoader(dataset, batch_size=32, shuffle=True)
+    model = LJGnn().to(device)
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    epochs = 100
     for epoch in range(epochs):
         total_loss = 0
-        for xb, yb in loader:
-            pred = model(xb)
-            loss = criterion(pred, yb)
-            
+        for data in loader:
+            data.to(device)
             optimizer.zero_grad()
+            
+            pred_forces = model(data.x, data.edge_index, data.edge_attr)
+            loss = criterion(pred_forces, data.y)
             loss.backward()
             optimizer.step()
-            
             total_loss += loss.item()
-
         print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(loader):.6f}")
 
     return model
