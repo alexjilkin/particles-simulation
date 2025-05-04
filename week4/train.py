@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-from particles import Particle, lennard_jones_force, random_particles, create_lattice
+from particles import Particle, compute_forces, lennard_jones_force, random_particles, create_lattice
 from network import LJNet
 from tqdm import tqdm
 from consts import W, H, SIGMA
@@ -39,7 +39,7 @@ def particles_to_graph(positions, forces, cutoff=5.0):
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def compute_forces(particles):
+def compute_forces_old(particles):
     N = len(particles)
     forces = np.zeros((N, 2))
     for i in range(N):
@@ -67,7 +67,7 @@ def generate_data(N_samples, num_particles, cutoff=3.0, dt=0.01):
         print(f"Generating {N_samples} samples and saving to {filename}")
         data_X, data_Y = [], []
         for _ in tqdm(range(N_samples), desc="Generating data"):
-            particles = random_particles(num_particles, 1.15 * SIGMA, 6 * SIGMA)
+            particles = random_particles(num_particles, 1.15 * SIGMA, 5 * SIGMA)
 
             for p in particles:
                 p.vel = np.random.randn(2) * 0.2
@@ -77,20 +77,18 @@ def generate_data(N_samples, num_particles, cutoff=3.0, dt=0.01):
             for p in particles:
                 p.pos += p.vel * dt + 0.5 * p.acc * dt**2
                 p.pos %= [W, H] 
-
-            forces = compute_forces(particles)
+        
+            forces = compute_forces_old(particles)
             positions = np.array([p.pos for p in particles])
 
-            if np.any(np.abs(forces) > 30):
-                continue
-            if np.any(forces != 0):
+            if np.any(forces != 0) and np.all(np.abs(forces) < 30):
                 data_X.append(positions)
                 data_Y.append(forces)
 
         X = np.array(data_X)
         Y = np.array(data_Y)
 
-        np.savez_compressed(filename, X=X, Y=Y)
+        # np.savez_compressed(filename, X=X, Y=Y)
 
     graph_dataset = []
     for i in range(len(X)):
@@ -101,8 +99,9 @@ def generate_data(N_samples, num_particles, cutoff=3.0, dt=0.01):
         graph_dataset.append(graph)
 
     return X, Y, graph_dataset
-def train_gnn(N, epochs, lr=0.001):
-    _, _, dataset = generate_data(N, 30)
+
+def train_gnn(n_particles, N, epochs, lr=0.001):
+    _, _, dataset = generate_data(N, n_particles)
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
     model = LJGnn().to(device)
     criterion = nn.MSELoss()

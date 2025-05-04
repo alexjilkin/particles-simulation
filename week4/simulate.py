@@ -2,11 +2,13 @@ import pygame
 import numpy as np
 import torch
 
-from particles import STEPS_PER_FRAME, lennard_jones_force
-from consts import W, H
+from particles import STEPS_PER_FRAME, compute_forces, lennard_jones_force
+from consts import EPSILON, SIGMA, W, H
 from graph_network import LJGnn
 from train import device
 from torch_geometric.data import Data
+
+from utils import compute_total_energy
 
 def simulate(particles, dt=0.001, use_network=True, lj_net: LJGnn=0):
     pygame.init()
@@ -49,23 +51,12 @@ def simulate(particles, dt=0.001, use_network=True, lj_net: LJGnn=0):
                     pred_forces = lj_net(graph.x.to(device), graph.edge_index.to(device), graph.edge_attr.to(device))
 
                 forces = pred_forces.cpu().numpy()
-                for p, force in zip(particles, forces):
-                    p.force[:] = force
             else:
-                for p in particles:
-                    p.force[:] = 0
-
-                for i, pi in enumerate(particles):
-                    for j in range(i + 1, N):
-                        pj = particles[j]
-                        r_vec = pi.pos - pj.pos
-                        r_vec -= np.round(r_vec / np.array([W, H])) * np.array([W, H])
-                        r = np.linalg.norm(r_vec)
-                        if r > 1e-5:
-                            f = lennard_jones_force(pi, pj)
-                            pi.force += f
-                            pj.force -= f
-
+                forces = compute_forces(particles)
+                
+            for p, f in zip(particles, forces):
+                p.force[:] = f
+                    
             for p, old_acc in zip(particles, old_accs):
                 new_acc = p.force
                 p.vel += 0.5 * (old_acc + new_acc) * dt
@@ -73,8 +64,12 @@ def simulate(particles, dt=0.001, use_network=True, lj_net: LJGnn=0):
 
         screen.fill((0, 0, 0))
         for p in particles:
-            p.draw(screen, 5)
+            p.draw(screen)
 
+        total_energy = compute_total_energy(particles)
+        energy_text = font.render(f"Total Energy: {total_energy:.3f}", True, (255, 255, 255))
+        screen.blit(energy_text, (10, 10))
+        
         pygame.display.flip()
         clock.tick(60)
 
@@ -83,3 +78,5 @@ def simulate(particles, dt=0.001, use_network=True, lj_net: LJGnn=0):
                 running = False
 
     pygame.quit()
+
+

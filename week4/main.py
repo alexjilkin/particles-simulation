@@ -9,10 +9,13 @@ from consts import SIGMA, W, H
 from simulate import simulate
 
 import os
-num_particles = 30
 
-N = 5000
-epochs = 50
+from draw import Drawable
+n_particles = 30
+
+Drawable.set_zoom(10)
+N = 2000
+epochs = 10
 
 model_path = os.path.join("models", f"lj_net_{N}_{epochs}.pt")
 os.makedirs(os.path.dirname(model_path), exist_ok=True)
@@ -25,13 +28,13 @@ if os.path.exists(model_path):
         lj_net.load_state_dict(torch.load(model_path, map_location=device))
 else:
     print("Training model...")
-    lj_net = train_gnn(N, epochs)
+    lj_net = train_gnn(n_particles, N, epochs)
     torch.save(lj_net.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
 lj_net.eval()
 
-# particles = random_particles(30, 1.2 * SIGMA, 5 * SIGMA)
+# particles = random_particles(n_particles, 1.2 * SIGMA, 5 * SIGMA)
 
 particles = create_lattice(2.5 * SIGMA, 5, 6)
 
