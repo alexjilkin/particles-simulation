@@ -5,10 +5,9 @@ def compute_total_energy(particles):
     positions = np.array([p.pos for p in particles])
     velocities = np.array([p.vel for p in particles])
     
-    # Kinetic energy: 0.5 * v² summed over all particles
+    # Kinetic energy: 0.5 * v^2 summed over all particles
     kinetic = 0.5 * np.sum(np.sum(velocities**2, axis=1))
     
-    # Pairwise vectors with periodic boundary correction
     pos_i = positions[:, None, :]  # (N, 1, 2)
     pos_j = positions[None, :, :]  # (1, N, 2)
     r_vec = pos_i - pos_j
@@ -31,7 +30,7 @@ def compute_total_energy(particles):
 def is_far_enough(new_p, particles, min_dist):
     for p in particles:
         r_vec = new_p - p
-        r_vec -= np.round(r_vec / np.array([W, H])) * np.array([W, H])  # periodic boundary
+        r_vec -= np.round(r_vec / np.array([W, H])) * np.array([W, H])  
         if np.linalg.norm(r_vec) < min_dist:
             return False
     return True

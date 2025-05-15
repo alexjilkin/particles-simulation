@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LJ Simulation • Pixi 8 + ONNX</title>
+    <script src="https://unpkg.com/pixi.js@8/dist/pixi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #111;
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        height: 100vh;
+      }
+
+      #sim {
+        border: 1px solid #444;
+        border-radius: 6px;
+        box-shadow: 0 0 6px #000;
+        margin-top: 2rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="sim"></div>
+
+    <script>
+      (async () => {
+        const SIGMA = 1.5;
+        const ZOOM = 10;
+        const SPACING = 2.1 * SIGMA;
+        const ROWS = 10;
+        const COLS = 20;
+        const NUM = ROWS * COLS;
+        const W = Math.ceil(COLS * SPACING + SIGMA * 2);
+        const H = Math.ceil(ROWS * SPACING + SIGMA * 2);
+        const CANVAS_W = W * ZOOM;
+        const CANVAS_H = H * ZOOM;
+        const DT = 0.001;
+
+        const app = new PIXI.Application();
+        await app.init({
+          width: CANVAS_W,
+          height: CANVAS_H,
+          background: "#000",
+          autoDensity: true,
+          antialias: true,
+          resolution: devicePixelRatio || 1,
+        });
+
+        document.getElementById("sim").appendChild(app.canvas || app.view);
+
+        const gfx = new PIXI.Graphics();
+        app.stage.addChild(gfx);
+
+        const pos = new Float32Array(NUM * 2);
+        const vel = new Float32Array(NUM * 2);
+        let acc = new Float32Array(NUM * 2);
+
+        let idx = 0;
+        const x0 = (W - (COLS - 1) * SPACING) / 2;
+        const y0 = (H - (ROWS - 1) * SPACING) / 2;
+        for (let i = 0; i < ROWS; i++) {
+          for (let j = 0; j < COLS; j++) {
+            pos[2 * idx] = x0 + j * SPACING;
+            pos[2 * idx + 1] = y0 + i * SPACING;
+            idx++;
+          }
+        }
+
+        let ses;
+        try {
+          ses = await ort.InferenceSession.create("lj_net.onnx", {
+            executionProviders: ["webgl"],
+          });
+        } catch {
+          ses = await ort.InferenceSession.create("lj_net.onnx", {
+            executionProviders: ["wasm"],
+          });
+        }
+
+        function buildEdges() {
+          const e = [];
+          const a = [];
+          for (let i = 0; i < NUM; i++) {
+            const xi = pos[2 * i];
+            const yi = pos[2 * i + 1];
+            for (let j = 0; j < NUM; j++) {
+              if (i === j) continue;
+              const dx = pos[2 * j] - xi;
+              const dy = pos[2 * j + 1] - yi;
+              const d = Math.hypot(dx, dy);
+              if (d < 4 * SIGMA && d > 1e-3) {
+                e.push(i, j);
+                a.push(dx, dy, d);
+              }
+            }
+          }
+          return { e, a };
+        }
+
+        app.ticker.add(async () => {
+          const { e, a } = buildEdges();
+
+          const feed = {
+            positions: new ort.Tensor("float32", pos, [NUM, 2]),
+            edge_index: new ort.Tensor(
+              "int64",
+              BigInt64Array.from(e.map((v) => BigInt(v))),
+              [2, e.length / 2]
+            ),
+            edge_attr: new ort.Tensor("float32", Float32Array.from(a), [a.length / 3, 3]),
+          };
+
+          const out = await ses.run(feed);
+          acc = out.accelerations.data;
+
+          for (let i = 0; i < NUM; i++) {
+            vel[2 * i] += acc[2 * i] * DT;
+            vel[2 * i + 1] += acc[2 * i + 1] * DT;
+
+            pos[2 * i] = (pos[2 * i] + vel[2 * i] * DT + W) % W;
+            pos[2 * i + 1] = (pos[2 * i + 1] + vel[2 * i + 1] * DT + H) % H;
+          }
+
+          gfx.clear();
+          gfx.beginFill(0xffffff);
+          for (let i = 0; i < NUM; i++) {
+            gfx.drawCircle(pos[2 * i] * ZOOM, pos[2 * i + 1] * ZOOM, SIGMA * ZOOM);
+          }
+          gfx.endFill();
+        });
+      })();
+    </script>
+  </body>
+</html>

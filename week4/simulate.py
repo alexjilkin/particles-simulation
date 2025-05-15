@@ -16,55 +16,51 @@ def simulate(particles, dt=0.001, use_network=True, lj_net: LJGnn=0):
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 24)
 
-    N = len(particles)
+    positions = torch.tensor(np.array([p.pos for p in particles]), device=device, dtype=torch.float32)
+    velocities = torch.tensor(np.array([p.vel for p in particles]), device=device, dtype=torch.float32)
+    accelerations = torch.tensor(np.array([p.acc for p in particles]), device=device, dtype=torch.float32)
+
     running = True
     while running:
-        for _ in range(STEPS_PER_FRAME):
-            for p in particles:
-                p.pos += p.vel * dt + 0.5 * p.acc * dt**2
-                p.pos %= [W, H]
+        for y in range(STEPS_PER_FRAME):
+            positions += velocities * dt + 0.5 * accelerations * dt ** 2
+            positions %= torch.tensor([W, H], device=device)
 
-            old_accs = [p.acc.copy() for p in particles]
+            old_accs = accelerations.clone()
 
             if use_network:
-                positions = np.array([p.pos for p in particles])
-                N = len(particles)
+                rel_vecs = positions[:, None, :] - positions[None, :, :]
+                rel_vecs -= torch.round(rel_vecs / torch.tensor([W, H], device=device)) * torch.tensor([W, H], device=device)
+                dists = torch.norm(rel_vecs, dim=-1)
 
-                edge_index = []
-                edge_attr = []
-                for i in range(N):
-                    for j in range(N):
-                        if i != j:
-                            vec = positions[i] - positions[j]
-                            dist = np.linalg.norm(vec)
-                            if dist < 5:
-                                edge_index.append([i, j])
-                                edge_attr.append([vec[0], vec[1], dist])
-                edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-                edge_attr = torch.tensor(edge_attr, dtype=torch.float32) 
-                
-                x = torch.tensor(positions, dtype=torch.float32)
-                graph = Data(x=x, edge_index=edge_index.to(device), edge_attr=edge_attr)
+                mask = (dists < SIGMA * 4) & (dists > 1e-5)
+                i_idx, j_idx = torch.nonzero(mask, as_tuple=True)
+
+                edge_index = torch.stack([i_idx, j_idx])
+                edge_attr = torch.stack([
+                    rel_vecs[i_idx, j_idx, 0],
+                    rel_vecs[i_idx, j_idx, 1],
+                    dists[i_idx, j_idx]
+                ], dim=1)
 
                 lj_net.eval()
                 with torch.no_grad():
-                    pred_forces = lj_net(graph.x.to(device), graph.edge_index.to(device), graph.edge_attr.to(device))
-
-                forces = pred_forces.cpu().numpy()
+                    accelerations = lj_net(positions, edge_index, edge_attr) 
             else:
-                forces = compute_forces(particles)
+                accelerations = lennard_jones_gpu(positions)
                 
-            for p, f in zip(particles, forces):
-                p.force[:] = f
-                    
-            for p, old_acc in zip(particles, old_accs):
-                new_acc = p.force
-                p.vel += 0.5 * (old_acc + new_acc) * dt
-                p.acc = new_acc
+            velocities += 0.5 * (old_accs + accelerations) * dt
+            
+            if(y == 0):
+                pos_cpu = positions.detach().cpu().numpy()
+                
+                for p, new_pos in zip(particles, pos_cpu):
+                    p.pos[:] = new_pos                        
 
-        screen.fill((0, 0, 0))
-        for p in particles:
-            p.draw(screen)
+                screen.fill((0, 0, 0))
+                for p in particles:
+                    p.draw(screen)
+
 
         total_energy = compute_total_energy(particles)
         energy_text = font.render(f"Total Energy: {total_energy:.3f}", True, (255, 255, 255))
@@ -79,4 +75,15 @@ def simulate(particles, dt=0.001, use_network=True, lj_net: LJGnn=0):
 
     pygame.quit()
 
+BOX  = torch.tensor([W, H], dtype=torch.float32, device=device)
 
+def lennard_jones_gpu(pos, r_cut=5.0):
+    rel = pos[:, None, :] - pos[None, :, :]
+    rel -= torch.round(rel / BOX) * BOX                    
+    r2  = (rel**2).sum(dim=-1)                             
+    mask = (r2 > 1e-12) & (r2 < r_cut**2)
+    inv_r6 = (SIGMA**2 / r2.clamp_min(1e-12))**3           # (σ/r)^6
+    f_scalar = 24*EPSILON * (2*inv_r6**2 - inv_r6) / r2    # |F|/r
+    f_scalar.masked_fill_(~mask, 0.0)
+    forces = (f_scalar.unsqueeze(-1) * rel).sum(dim=1)     # sum_j F_ij
+    return forces

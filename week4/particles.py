@@ -24,7 +24,7 @@ class Particle(Drawable):
 
     def draw(self, surf):
         screen_pos = self.world_to_screen().astype(int)
-        radius = max(1, int(1 * Drawable.zoom))
+        radius = max(1, int(0.8 * Drawable.zoom))
         pygame.draw.circle(surf, (255, 255, 255), screen_pos, radius, width=1)
         
 def lennard_jones_force(p1, p2, max_force=50):
@@ -64,7 +64,7 @@ def random_particles(N, min_dist=1.1 * SIGMA, max_dist=1.5 * SIGMA):
         if is_far_enough(new_pos, [p.pos for p in particles], min_dist):
             p = Particle()
             p.pos = new_pos.copy()
-            # p.vel = np.random.uniform(-1, 1, size=2)
+            p.vel = np.random.uniform(-1, 1, size=2) * 0.2
             particles.append(p)
 
     return particles
@@ -76,7 +76,7 @@ def create_lattice(spacing=1.5 * SIGMA, rows=3, cols=5):
     for i in range(rows):
         for j in range(cols):
             p = Particle()
-            p.pos = np.array([W / 2 + j * spacing, H / 2 + i * spacing])
+            p.pos = np.array([W / 2 - 10 + j * spacing, H / 2 -10 + i * spacing])
             p.vel = np.zeros(2) 
             particles.append(p)
     return particles
@@ -111,3 +111,4 @@ def compute_forces(particles):
     forces -= np.sum(f_vec, axis=0)
 
     return forces
+

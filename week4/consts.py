@@ -1,3 +1,3 @@
 W, H = 1200, 800
-SIGMA = 2
-EPSILON = 1
+SIGMA = 1.5
+EPSILON = 0.5
